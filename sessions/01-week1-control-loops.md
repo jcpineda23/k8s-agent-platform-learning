@@ -37,9 +37,13 @@ None of these components call each other directly. They communicate only by read
 
 ## The diagram
 
-![Lab 1 cluster components](../assets/lab1-cluster.svg)
+![Lab 1 cluster components, animated through each lab step](../assets/lab1-cluster-animated.svg)
 
-The interactive version, with a button per lab step, is in [`assets/lab1-cluster-interactive.html`](../assets/lab1-cluster-interactive.html). Open it in a browser.
+The animation cycles through the overview and all seven steps, about 4.5 seconds each (36 seconds per loop). Amber marks the parts a step uses or changes; red marks the part you break on purpose.
+
+Other versions:
+- [Static diagram](../assets/lab1-cluster.svg), with no highlighting
+- [Interactive version](../assets/lab1-cluster-interactive.html), with a button per step. Open it in a browser.
 
 What each step touches:
 
@@ -248,13 +252,108 @@ Read with three questions in mind:
 
 ### My answers
 
-_(Write your answers here before the next session.)_
+1. The manager creates them but the scheduler is not there, so they don't get a node assigned.
+2. There is autoscaling so if the controller manager is missing, when it recovers it goes and checks the configuration in etcd.
+3. It uses version control so when it recovers it cannot recover from a stale copy.
+4. _(not answered; see the hints, experiment and model answer below)_
+5. Bonus: _(not answered; see the model answer below)_
 
-1.
-2.
-3.
-4.
-5. Bonus:
+### Coach feedback
+
+**Overall:** your intuition is right: there's a desired state, and something compares it with reality. What's missing is precision in three places, and those words matter in design reviews.
+
+**Q1: mostly right.** The ReplicaSet controller created the pods; the scheduler owns one field, `spec.nodeName`, and nobody filled it in. Missing piece, the "what does it tell you" half: the components never call each other. Each loop owns one part of the work and they meet only through objects in the API. "Pending with no node" is a perfectly valid state, so one dead loop degrades one function instead of taking down the system.
+
+**Q2: right idea, two corrections.**
+- **Autoscaling isn't involved.** `replicas: 6` is a fixed desired count you set. Autoscaling (HPA) is a *different* controller that changes that number. Here the mechanism is **reconciliation**: compare desired with actual and act on the difference.
+- **No controller reads etcd.** Only the API server talks to etcd. On restart the controller manager does a full LIST through the API server, rebuilds its cache, and sees 4 pods where 6 are desired.
+- **The event-driven version fails because** a missed event means permanent drift (nothing ever re-checks), a duplicated event means double creation, and out-of-order events confuse it. A level-triggered loop doesn't care how it got here; it only looks at the current state. That's why it recovered.
+
+**Q3: close on the mechanism, wrong on the purpose.** It's **optimistic concurrency**: each object has a `resourceVersion`, and a write based on an old version is rejected with a 409 Conflict. It's about **concurrent writers**, not recovery.
+- **Why no locks:** with many independent writers across a network, a client that crashes while holding a lock blocks everyone, so you'd need leases, timeouts and deadlock handling. Conflicts are rare, so "try, and retry if someone beat you" is cheaper and simpler.
+- **What it means for your controller:** expect any write to fail with a conflict. Then re-read, recompute and retry. Make reconcile idempotent, so running it twice gives the same result. Never treat your in-memory copy as the truth.
+
+**Q4: not answered yet.** Hints, without giving it away:
+- The dead node's kubelet can't report that it's dead. So *who* notices, and how long do they wait? (Look up the node lifecycle controller and node Leases.)
+- Once the node is marked unreachable, how long until its pods are evicted? (Look up the default `tolerationSeconds` for `node.kubernetes.io/unreachable`.)
+- **The trap:** suppose a replacement pod does appear. Is it the *same* pod? What happened to anything the agent kept in memory or in an `emptyDir` volume? And what if the pod wasn't owned by a ReplicaSet at all?
+
+**Experiment to answer it with evidence.** Simulate a node death in your kind cluster and watch it unfold (it takes over 5 minutes):
+
+```bash
+kubectl get nodes,pods -o wide -w
+```
+
+```bash
+docker stop learn-worker
+```
+
+Note the time each change appears, then restart the node with `docker start learn-worker`.
+
+### Model answers
+
+**Q1. Why were pods created while the scheduler was down?**
+
+Creating pods and placing them are separate jobs owned by separate loops. The ReplicaSet controller (in the controller manager) saw 3 pods where 6 were desired and created 3 Pod objects. Placing a pod means filling in its `spec.nodeName`, and only the scheduler does that. With the scheduler gone, the new pods stayed Pending.
+
+What it tells you: the components don't call each other. Each loop owns one piece of the work and they coordinate only through objects in the API server. "Pending, no node" is a valid state that the next loop picks up whenever it's running. So a failed component degrades one function instead of the whole system, and work resumes when it comes back.
+
+**Q2. Why did the controller manager recover after missing the delete events?**
+
+Because its controllers are **level-triggered**. On restart, the controller manager lists the current state through the API server (it never reads etcd directly) and rebuilds its cache. The ReplicaSet controller then compares desired (`replicas: 6`) with actual (the pods matching its selector), sees a shortfall and creates the difference. It doesn't need to know *what happened*, only *what is*. No autoscaling is involved: `replicas` is a fixed number you set.
+
+An **edge-triggered** design ("when a pod is deleted, create one") would break in three ways:
+- **Missed events** (like a restart) leave the system wrong forever, because nothing re-checks.
+- **Duplicated events** create extra pods.
+- **Out-of-order events** make it act on a stale picture.
+
+Real controllers use events only as a hint that something *might* have changed. Each one triggers a full comparison of desired and actual state, and controllers also re-check everything periodically.
+
+**Q3. Why doesn't Kubernetes use locks?**
+
+It uses **optimistic concurrency**. Every object has a `resourceVersion` that changes on each write. An update carries the version it was based on, and the API server rejects it with a 409 Conflict if the object has changed since. That's what `kubectl replace` hit in Step 5.
+
+Locks would be worse in a distributed system with many independent writers. A client that crashes holding a lock blocks everyone, so you'd need leases, timeouts and deadlock handling, and every write would pay that cost. Conflicts are rare, so "write, and retry if someone beat you" is simpler and scales better.
+
+For a controller you write:
+- **Expect conflicts.** On a 409, re-read the latest object, recompute and retry. Don't overwrite blindly.
+- **Make reconcile idempotent.** Running it twice, or a thousand times, must give the same result.
+- **Never treat your in-memory copy as the truth.** It's a cache of the API server.
+- **Write only the fields you own,** using patches or server-side apply, so you don't clobber other controllers' changes.
+
+**Q4. A node dies while an agent session runs on it. What happens?**
+
+In order:
+
+1. **Nobody hears from the node.** The kubelet normally renews a Lease object every 10 seconds and reports node status. A dead kubelet can't report that it's dead, so nothing happens immediately.
+2. **The node lifecycle controller** (in the controller manager) notices the missed heartbeats after the node-monitor grace period, roughly 40–50 seconds depending on version. It marks the node's Ready condition `Unknown` and adds the taint `node.kubernetes.io/unreachable:NoExecute`.
+3. **Pods wait out their toleration.** By default every pod tolerates that taint for 300 seconds (`tolerationSeconds: 300`, added at admission). For about 5 more minutes, the API still says the pod is Running on that node.
+4. **Eviction.** After the toleration expires, the pod is marked for deletion. Because the kubelet is gone, it can't confirm the container stopped, so the old Pod object sits in `Terminating` until the node returns or someone force-deletes it.
+5. **Replacement (only for some owners).** The ReplicaSet controller ignores pods being deleted, sees a shortfall and creates a new pod. The scheduler places it on a healthy node and that node's kubelet starts it. In total the session is down for roughly 5–6 minutes.
+
+**The trap:** the replacement is a **new pod**: new name, new IP, empty memory, and a fresh `emptyDir`. Kubernetes restores the **count**, not the **session**. The agent's conversation state, scratch files and in-flight tool calls are gone. Worse, a tool call may have *completed its side effect* (sent an email, written to a database) before the node died, with no record that it did.
+
+It also depends on the owner:
+- **A bare pod** with no controller is never recreated.
+- **A StatefulSet pod** is *not* replaced while the old one is stuck in `Terminating`, because StatefulSets guarantee at most one pod per identity. It stays down until the node returns or someone force-deletes the old pod.
+
+Implications for the Agent Platform:
+- **Keep session state outside the pod.** Checkpoint it, or run the agent loop on durable execution such as Temporal.
+- **Make tool calls idempotent,** for example with idempotency keys, so a resumed session can retry safely.
+- **Consider a shorter `tolerationSeconds`** for agent pods, trading faster failover against evicting pods during brief network blips.
+- **Treat session recovery as a platform feature with an SLO,** not something Kubernetes gives you for free.
+
+**Bonus. What happens to running pods if the API server stops?**
+
+**They keep running.** The data plane doesn't depend on the control plane minute to minute. The container runtime keeps containers alive, and the kubelet still restarts crashed containers locally according to their `restartPolicy`. Service routing keeps working because kube-proxy (or Cilium) already programmed the rules on each node.
+
+What stops is everything that needs a change:
+- `kubectl` and every other client fail.
+- No scheduling, no new pods and no scaling.
+- Controllers can't see or fix anything, so a pod lost on a dead node isn't replaced.
+- Kubelets can't report status, and nodes can't be marked NotReady.
+
+The cluster freezes in its last known state. It doesn't fall over, but it can't heal itself either. This is why managed Kubernetes runs several API server replicas, and why API server availability is the control-plane SLO that matters most.
 
 ---
 
