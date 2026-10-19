@@ -1,0 +1,530 @@
+<title>Kubernetes for Agent Platforms</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: a sticky "kubectl get" status rail on the left, the plan as one readable column on the right; stacks on phones. */
+:root {
+  --bg: #F5F7FA;
+  --surface: #FFFFFF;
+  --fg: #142030;
+  --muted: #56657A;
+  --line: #D9DFE8;
+  --accent: #2B56C9;
+  --accent-soft: #E6ECFA;
+  --good: #0B7F61;
+  --good-soft: #DDF2EA;
+  --warn: #9A5B00;
+  --term-bg: #10192A;
+  --term-fg: #D5DEEC;
+  --term-dim: #7D8BA3;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D131C; --surface: #141C28; --fg: #E2E8F0; --muted: #94A2B8; --line: #263244;
+    --accent: #84A6FF; --accent-soft: #1B2842; --good: #4FD1A5; --good-soft: #12302A; --warn: #F0B45A;
+    --term-bg: #080C13; --term-fg: #D5DEEC; --term-dim: #6E7C94;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D131C; --surface: #141C28; --fg: #E2E8F0; --muted: #94A2B8; --line: #263244;
+  --accent: #84A6FF; --accent-soft: #1B2842; --good: #4FD1A5; --good-soft: #12302A; --warn: #F0B45A;
+  --term-bg: #080C13; --term-fg: #D5DEEC; --term-dim: #6E7C94;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 80px;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.shell { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 56px; align-items: start; }
+@media (max-width: 960px) { .shell { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
+
+/* Rail */
+.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); display: grid; gap: 20px; min-width: 0; }
+@media (max-width: 960px) { .rail { position: static; } }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--font-display); font-stretch: 82%; font-weight: 800; font-size: clamp(34px, 5vw, 46px); line-height: 1.02; letter-spacing: -.01em; margin: 6px 0 10px; text-wrap: balance; }
+.lede { color: var(--muted); margin: 0; font-size: 15px; }
+
+.term { background: var(--term-bg); color: var(--term-fg); border-radius: 10px; padding: 16px 16px 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.75; overflow-x: auto; }
+.term .prompt { color: var(--term-dim); white-space: nowrap; }
+.term .prompt b { color: var(--term-fg); font-weight: 500; }
+.term table { border-collapse: collapse; width: 100%; margin-top: 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.term th { text-align: left; font-weight: 500; color: var(--term-dim); padding-right: 14px; }
+.term td { padding-right: 14px; }
+.term td a { color: inherit; text-decoration: none; }
+.term td a:hover { text-decoration: underline; }
+.st-Pending { color: var(--term-dim); }
+.st-Progressing { color: #F2C46D; }
+.st-Complete { color: #5FE0B0; }
+.meter { margin-top: 12px; height: 6px; background: #22304A; border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: #5FE0B0; transition: width .35s ease; }
+.term .total { display: flex; justify-content: space-between; margin-top: 8px; color: var(--term-dim); }
+.save { font-family: var(--font-mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.save .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.save[data-mode="account"] .dot { background: var(--good); }
+.save[data-mode="local"] .dot { background: var(--warn); }
+.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; }
+.toc a { text-decoration: none; color: var(--muted); }
+.toc a:hover { color: var(--accent); }
+
+/* Main column */
+main { min-width: 0; max-width: 720px; display: grid; gap: 64px; }
+section { display: grid; gap: 18px; scroll-margin-top: 24px; }
+h2 { font-family: var(--font-display); font-stretch: 88%; font-weight: 700; font-size: 28px; line-height: 1.15; margin: 0; text-wrap: balance; }
+h3 { font-family: var(--font-display); font-stretch: 92%; font-weight: 700; font-size: 20px; line-height: 1.25; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.sec-head { display: grid; gap: 6px; }
+.kind { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+
+.frame { display: grid; gap: 12px; padding: 0; margin: 0; list-style: none; counter-reset: f; }
+.frame li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; counter-increment: f; }
+.frame li::before { content: counter(f); font-family: var(--font-mono); font-size: 13px; color: var(--accent); padding-top: 2px; }
+.habits { display: grid; gap: 8px; padding-left: 20px; margin: 0; }
+.note { font-size: 14px; color: var(--muted); }
+
+.phase { display: grid; gap: 14px; padding-top: 22px; border-top: 1px solid var(--line); }
+.phase-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.weeks { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pill { font-family: var(--font-mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pill[data-st="Progressing"] { color: var(--warn); border-color: currentColor; }
+.pill[data-st="Complete"] { color: var(--good); background: var(--good-soft); border-color: transparent; }
+
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
+.check { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; }
+.check:hover { background: var(--accent-soft); }
+.check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.box { width: 18px; height: 18px; margin-top: 3px; border: 1.5px solid var(--muted); border-radius: 4px; display: grid; place-items: center; transition: background .15s, border-color .15s; }
+.box svg { width: 12px; height: 12px; opacity: 0; }
+.check input:checked + .box { background: var(--good); border-color: var(--good); }
+.check input:checked + .box svg { opacity: 1; }
+.check input:checked ~ .txt { color: var(--muted); }
+.txt { min-width: 0; }
+.txt small { display: block; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.milestone { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 4px 0 0; }
+.milestone .tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 2px; }
+.milestone .check { margin: 0 -8px; }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table.deltas { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 620px; }
+.deltas th, .deltas td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.deltas tr:last-child td { border-bottom: 0; }
+.deltas th { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.deltas td:first-child { font-weight: 600; }
+
+.group { display: grid; gap: 6px; }
+.group-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+
+.project { display: grid; gap: 12px; padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.project .crd { font-family: var(--font-mono); font-size: 12px; color: var(--muted); overflow-x: auto; white-space: nowrap; }
+.project .crd b { color: var(--accent); font-weight: 500; }
+.learn { font-size: 14px; color: var(--muted); }
+.learn b { color: var(--fg); font-weight: 600; }
+
+.week { background: var(--accent-soft); border-radius: 10px; padding: 20px 22px; display: grid; gap: 10px; }
+
+.reset { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; color: var(--muted); }
+button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.danger { color: #fff; background: #B3261E; border-color: #B3261E; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="shell">
+  <aside class="rail" aria-label="Progress">
+    <div>
+      <div class="eyebrow">24-week learning plan</div>
+      <h1>Kubernetes for Agent Platforms</h1>
+      <p class="lede">A plan for an engineering manager leading an agent platform on Kubernetes. About 5–7 hours a week: 40% reading, 40% hands-on, 20% writing and teaching.</p>
+    </div>
+    <div class="term" role="region" aria-label="Progress by phase">
+      <div class="prompt">$ <b>kubectl get phases -n learning</b></div>
+      <table>
+        <thead><tr><th>NAME</th><th>WEEKS</th><th>READY</th><th>STATUS</th></tr></thead>
+        <tbody id="status-rows"></tbody>
+      </table>
+      <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+      <div class="total"><span>total</span><span id="total">0/0 · 0%</span></div>
+    </div>
+    <div class="save" id="save" data-mode="pending"><span class="dot"></span><span id="save-text">Progress saves in this browser until your account connects</span></div>
+    <nav class="toc" aria-label="Sections">
+      <a href="#frame">Coaching frame</a><a href="#phases">Phases</a><a href="#deltas">Agent deltas</a><a href="#reading">Reading</a><a href="#projects">Projects</a><a href="#claude-code">Using Claude Code</a><a href="#this-week">This week</a>
+    </nav>
+  </aside>
+
+  <main>
+    <section id="frame">
+      <div class="sec-head"><span class="kind">kind: CoachingFrame</span><h2>What you're actually learning</h2></div>
+      <p>You don't need to be your team's best <code>kubectl</code> operator. You need three things:</p>
+      <ol class="frame">
+        <li><div><b>An accurate mental model</b> of Kubernetes, so you can tell when a design is fighting the system and when it's working with it.</div></li>
+        <li><div><b>Fluency in what's different about agent workloads.</b> Most Kubernetes knowledge assumes stateless web services. Agents are long-running, stateful, bursty and expensive, and they run untrusted code. Your edge comes from understanding that gap.</div></li>
+        <li><div><b>Judgment you can pass on:</b> design-review questions, failure stories and tradeoff calls your team learns from.</div></li>
+      </ol>
+      <h3>Habits that make it stick</h3>
+      <ul class="checks" data-group="habits"></ul>
+    </section>
+
+    <section id="phases">
+      <div class="sec-head"><span class="kind">kind: PhaseList</span><h2>Six phases, 24 weeks</h2></div>
+      <div id="phase-list" style="display:grid;gap:36px"></div>
+    </section>
+
+    <section id="deltas">
+      <div class="sec-head"><span class="kind">kind: Reference</span><h2>What's different about agent workloads</h2></div>
+      <p>The core of Phase 3. Each row is a question your platform has to answer.</p>
+      <div class="tablewrap">
+        <table class="deltas">
+          <thead><tr><th>Agent property</th><th>Kubernetes concern</th><th>Study</th></tr></thead>
+          <tbody>
+            <tr><td>Runs LLM-generated or untrusted code</td><td>Isolation beyond containers</td><td>RuntimeClass, gVisor, Kata Containers, Firecracker microVMs, kubernetes-sigs/agent-sandbox</td></tr>
+            <tr><td>Long-running, stateful sessions</td><td>Pods are disposable; sessions aren't</td><td>Session affinity, checkpoint/restore, StatefulSets, durable execution (Temporal, Dapr Workflows)</td></tr>
+            <tr><td>Bursty, latency-sensitive startup</td><td>Cold starts hurt the user experience</td><td>Warm pools, image streaming, pre-pulled images, KEDA scale-from-zero</td></tr>
+            <tr><td>Calls tools and external APIs</td><td>Egress is the attack surface</td><td>Egress NetworkPolicy, Cilium FQDN policies, egress gateways, MCP gateways</td></tr>
+            <tr><td>GPU-backed inference</td><td>Scarce, expensive accelerators</td><td>Dynamic Resource Allocation, Kueue, LeaderWorkerSet, JobSet, KServe, vLLM, llm-d, Gateway API Inference Extension</td></tr>
+            <tr><td>Multi-agent coordination</td><td>Service discovery and protocols</td><td>MCP, A2A, kagent, Dapr Agents</td></tr>
+            <tr><td>Cost depends on tokens, not CPU</td><td>The default scaling signal is wrong</td><td>Custom metrics: queue depth, in-flight tokens, KV-cache use</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="reading">
+      <div class="sec-head"><span class="kind">kind: ReadingList</span><h2>Books, papers and feeds</h2></div>
+      <div id="reading-list" style="display:grid;gap:18px"></div>
+    </section>
+
+    <section id="projects">
+      <div class="sec-head"><span class="kind">kind: ProjectList</span><h2>Three projects to build with Claude Code</h2></div>
+      <p>Each one maps to a phase and runs on a laptop with <code>kind</code>.</p>
+      <div id="project-list" style="display:grid;gap:20px"></div>
+    </section>
+
+    <section id="claude-code">
+      <div class="sec-head"><span class="kind">kind: Practice</span><h2>Using Claude Code so you actually learn</h2></div>
+      <ul class="habits">
+        <li><b>Write the design doc yourself first.</b> Then ask Claude Code to critique it before any code exists. The design thinking is the part you need to practice.</li>
+        <li><b>Put a teach mode in each project's <code>CLAUDE.md</code>:</b> "Explain each Kubernetes concept before you implement it. After each change, ask me one question to check my understanding."</li>
+        <li><b>Make it break things.</b> Ask Claude Code to add a subtle bug (a missing finalizer, a wrong selector, a bad probe) without telling you where, then debug it with <code>kubectl</code> alone.</li>
+        <li><b>Read every diff line by line.</b> If you can't explain a line, ask for an explanation before you accept it.</li>
+        <li><b>Turn each project into a team asset.</b> Present it at a brown-bag session; your engineers' questions show you what you still don't understand.</li>
+      </ul>
+    </section>
+
+    <section id="this-week">
+      <div class="week">
+        <span class="kind">kind: Job · schedule: this week</span>
+        <h3>Start here</h3>
+        <ul class="checks" data-group="start"></ul>
+      </div>
+      <div class="reset" id="reset">
+        <span>Progress is private to you.</span>
+        <button type="button" id="reset-btn">Clear my progress</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+const PHASES = [
+  { id: "p0", name: "mental-model", weeks: "1–4", title: "Phase 0 · The mental model",
+    intro: "Kubernetes is a database (etcd), an API server and many independent control loops that reconcile desired state with actual state. Everything else follows from that.",
+    items: [
+      ["API machinery", "Objects, spec/status, resourceVersion, watches, informers, optimistic concurrency"],
+      ["The scheduler", "Filtering and scoring, affinity, taints and tolerations, topology spread, preemption, priority classes"],
+      ["Pod lifecycle", "Init containers, native sidecars, probes, graceful termination, QoS classes, OOM behavior"],
+      ["Networking", "CNI, Services, kube-proxy vs eBPF (Cilium), DNS, NetworkPolicy, Gateway API"],
+      ["Storage", "PV/PVC, CSI, StatefulSets"],
+      ["Hands-on: Kubernetes the Hard Way", "<a href=\"https://github.com/kelseyhightower/kubernetes-the-hard-way\">github.com/kelseyhightower/kubernetes-the-hard-way</a>, then a local kind cluster for everything after"]
+    ],
+    milestone: "Whiteboard what happens between kubectl apply -f deploy.yaml and a running container, naming every component involved." },
+  { id: "p1", name: "extending-k8s", weeks: "5–8", title: "Phase 1 · Extending Kubernetes",
+    intro: "Your Agent Platform will almost certainly be built from CRDs and controllers, so this phase matters most for you.",
+    items: [
+      ["CRDs, controllers and operators", "Level-triggered vs edge-triggered reconciliation, idempotency"],
+      ["Object lifecycle", "Finalizers, owner references, garbage collection, status conditions"],
+      ["Admission", "Admission webhooks and ValidatingAdmissionPolicy (CEL)"],
+      ["Kubebuilder and controller-runtime", "Work through the <a href=\"https://book.kubebuilder.io\">Kubebuilder Book</a>"],
+      ["API design", "Versioning, conversion webhooks, why spec and status are split"]
+    ],
+    milestone: "Write a small controller and explain why a reconcile loop must tolerate running a thousand times on the same object." },
+  { id: "p2", name: "production-cloud", weeks: "9–12", title: "Phase 2 · Production Kubernetes in the cloud",
+    intro: "How managed clusters behave under real tenants, real identity and real bills.",
+    items: [
+      ["Managed Kubernetes", "EKS, GKE and AKS differences, control-plane limits, upgrade strategy"],
+      ["Workload identity", "EKS Pod Identity or IRSA, GKE Workload Identity. Agents calling cloud APIs depend on this."],
+      ["Autoscaling", "HPA, VPA, KEDA, Cluster Autoscaler vs Karpenter, in-place pod resize"],
+      ["Multi-tenancy", "Namespaces vs virtual clusters (vCluster) vs separate clusters, ResourceQuotas, LimitRanges"],
+      ["Delivery", "GitOps with Argo CD or Flux, progressive delivery with Argo Rollouts"],
+      ["Cost", "Bin-packing, spot instances, OpenCost"]
+    ],
+    milestone: "Write a one-page decision record: our tenancy model for agent workloads, and why." },
+  { id: "p3", name: "agentic-workloads", weeks: "13–18", title: "Phase 3 · Agentic workloads",
+    intro: "The core of the plan. Use the agent-deltas table below as your study map.",
+    items: [
+      ["Sandboxing", "RuntimeClass with gVisor and Kata; read the <a href=\"https://github.com/kubernetes-sigs/agent-sandbox\">agent-sandbox</a> design"],
+      ["Session state", "Affinity, checkpoint/restore, durable execution with Temporal or Dapr Workflows"],
+      ["Cold starts", "Warm pools, image streaming, scale-from-zero with KEDA"],
+      ["Egress control", "Cilium FQDN policies, egress gateways, MCP gateways"],
+      ["Inference on Kubernetes", "DRA, <a href=\"https://kueue.sigs.k8s.io\">Kueue</a>, LeaderWorkerSet, KServe, vLLM, <a href=\"https://llm-d.ai\">llm-d</a>, <a href=\"https://github.com/kubernetes-sigs/gateway-api-inference-extension\">Gateway API Inference Extension</a>"],
+      ["Agent protocols", "<a href=\"https://modelcontextprotocol.io\">MCP</a>, A2A, kagent, Dapr Agents"]
+    ],
+    milestone: "Write a reference architecture for one agent session end to end: request, sandbox, tools, model call, state, teardown, and every trust boundary." },
+  { id: "p4", name: "reliability-security", weeks: "19–22", title: "Phase 4 · Reliability, security and observability",
+    intro: "How agent workloads fail, and how you find out.",
+    items: [
+      ["Observability", "OpenTelemetry with the <a href=\"https://opentelemetry.io/docs/specs/semconv/gen-ai/\">GenAI semantic conventions</a>; trace agent → tool → model; token and cost metrics"],
+      ["SLOs for agents", "Task success rate, time to first token, tool-call error rate, cost per task"],
+      ["Policy and supply chain", "Pod Security Standards, Kyverno or OPA Gatekeeper, Sigstore/cosign, SBOMs"],
+      ["Secrets", "External Secrets, short-lived tokens"],
+      ["Failure modes", "Eviction mid-tool-call, double-execution of non-idempotent tools, retry storms against model APIs"]
+    ],
+    milestone: "Run a tabletop with your team: an agent was prompt-injected and tried to exfiltrate data. Walk through what stops it." },
+  { id: "p5", name: "leadership", weeks: "23–24", title: "Phase 5 · Leadership synthesis",
+    intro: "Turn what you learned into direction for the team.",
+    items: [
+      ["Platform strategy doc", "The next 12–18 months: build vs buy, the abstractions you expose to agent developers, and what you won't build"],
+      ["Team tech radar", "Adopt, trial, assess, hold"],
+      ["Optional: CKA, then CKS", "The CKS material maps directly onto sandboxing"]
+    ],
+    milestone: "Present the strategy doc to your leadership chain and your team." }
+];
+
+const HABITS = [
+  ["Teach weekly", "A 15-minute \"what I learned\" segment at team sync. Teaching shows you where your understanding has gaps."],
+  ["Read one KEP or design doc a week", "From <a href=\"https://github.com/kubernetes/enhancements\">kubernetes/enhancements</a>. The fastest way to see how senior engineers reason about the system."],
+  ["Run a monthly game day", "Break something on purpose in a sandbox cluster, then debug it without help."]
+];
+
+const READING = [
+  { id: "bk", label: "Books · Kubernetes core", items: [
+    ["Kubernetes: Up and Running, 3rd ed.", "Burns, Beda, Hightower, Evenson. Start here."],
+    ["Kubernetes Patterns, 2nd ed.", "Ibryam, Huß. The best book for design vocabulary."],
+    ["Programming Kubernetes", "Hausenblas, Schimanski. Controllers and API machinery; essential for Phase 1."],
+    ["Production Kubernetes", "Rosso, Lander, Brand, Harris. Platform-team decisions, the closest fit to your role."],
+    ["Kubernetes Best Practices, 2nd ed.", "Burns, Villalba, Strebel, Evenson"]
+  ]},
+  { id: "bs", label: "Books · Security and systems", items: [
+    ["Container Security", "Liz Rice"],
+    ["Learning eBPF", "Liz Rice"],
+    ["Hacking Kubernetes", "Martin, Hausenblas. Threat modeling from the attacker's side."],
+    ["Designing Distributed Systems, 2nd ed.", "Brendan Burns. Includes AI and LLM serving patterns."],
+    ["Designing Data-Intensive Applications", "Martin Kleppmann"],
+    ["Site Reliability Engineering and The SRE Workbook", "Google, <a href=\"https://sre.google/books/\">free online</a>"]
+  ]},
+  { id: "bl", label: "Books · AI and leadership", items: [
+    ["AI Engineering", "Chip Huyen"],
+    ["Platform Engineering", "Camille Fournier, Ian Nowland. Written for platform leaders."],
+    ["The Staff Engineer's Path", "Tanya Reilly"]
+  ]},
+  { id: "pk", label: "Papers · Where Kubernetes came from (in order)", items: [
+    ["<a href=\"https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/\">Large-scale cluster management at Google with Borg</a>", "EuroSys 2015"],
+    ["Omega: flexible, scalable schedulers for large compute clusters", "EuroSys 2013"],
+    ["<a href=\"https://queue.acm.org/detail.cfm?id=2898444\">Borg, Omega, and Kubernetes</a>", "ACM Queue 2016. The most important one; short and full of lessons."],
+    ["Autopilot: workload autoscaling at Google", "EuroSys 2020"],
+    ["Mesos: A Platform for Fine-Grained Resource Sharing", "NSDI 2011"]
+  ]},
+  { id: "pi", label: "Papers · Isolation", items: [
+    ["<a href=\"https://www.usenix.org/conference/nsdi20/presentation/agache\">Firecracker: Lightweight Virtualization for Serverless Applications</a>", "NSDI 2020"],
+    ["The True Cost of Containing: A gVisor Case Study", "HotCloud 2019"]
+  ]},
+  { id: "pa", label: "Papers · AI infrastructure and agents", items: [
+    ["<a href=\"https://arxiv.org/abs/1712.05889\">Ray: A Distributed Framework for Emerging AI Applications</a>", "OSDI 2018"],
+    ["<a href=\"https://arxiv.org/abs/2309.06180\">Efficient Memory Management for LLM Serving with PagedAttention</a>", "The vLLM paper, SOSP 2023"],
+    ["<a href=\"https://arxiv.org/abs/2210.03629\">ReAct: Synergizing Reasoning and Acting in Language Models</a>", "Yao et al."],
+    ["Dapper, a Large-Scale Distributed Systems Tracing Infrastructure", "Google, 2010. Background for tracing agents."]
+  ]},
+  { id: "pb", label: "Posts, specs and feeds", items: [
+    ["<a href=\"https://www.anthropic.com/research/building-effective-agents\">Building Effective Agents</a>", "Anthropic, plus their engineering post on the multi-agent research system"],
+    ["<a href=\"https://modelcontextprotocol.io\">Model Context Protocol spec</a>", "How agents reach tools"],
+    ["Project READMEs and design docs", "agent-sandbox, Gateway API Inference Extension, Kueue, llm-d"],
+    ["KubeCon talks", "CNCF YouTube channel; search for AI, agents, DRA, sandbox"],
+    ["<a href=\"https://k8s.af\">k8s.af</a>", "Kubernetes failure stories"],
+    ["<a href=\"https://labs.iximiuz.com\">iximiuz Labs</a>", "Hands-on container and Kubernetes exercises"]
+  ]}
+];
+
+const PROJECTS = [
+  { id: "j1", title: "AgentSession operator: a sandboxed code-execution platform", phases: "Phases 1 and 3",
+    crd: "apiVersion: <b>agents.example.dev/v1alpha1</b> · kind: <b>AgentSession</b>",
+    summary: "A CRD and controller where each AgentSession provisions an isolated pod for an agent to run code in.",
+    steps: [
+      ["Scaffold the CRD and controller with Kubebuilder", "Status conditions: Pending → Ready → Idle → Terminated"],
+      ["Add a warm pool of pre-started sandboxes", "Measure p50/p99 time-to-ready with and without it"],
+      ["Switch RuntimeClass between runc and gVisor", "Benchmark the overhead"],
+      ["Generate a deny-all egress NetworkPolicy per session", "With an allowlist of domains"],
+      ["TTL and idle reaping with finalizers", ""],
+      ["Stretch: snapshot the workspace to a PVC and resume on another node", "Then compare your design with kubernetes-sigs/agent-sandbox and write up the differences"]
+    ],
+    learn: "reconciliation, CRD API design, isolation tradeoffs, and the warm-pool vs cost tension." },
+  { id: "j2", title: "Token-aware autoscaling and an inference gateway", phases: "Phases 2 and 3",
+    crd: "scaledobject.keda.sh · <b>trigger: queue-depth</b> · not cpu",
+    summary: "Deploy an inference backend and scale it on signals that matter for LLMs.",
+    steps: [
+      ["Deploy a backend", "vLLM with a small model if you have a GPU, llama.cpp on CPU, or a mock server that simulates token latency"],
+      ["Scale with KEDA on queue depth or in-flight requests", "Load-test with k6 and show that CPU-based HPA scales on the wrong signal"],
+      ["Add the Gateway API Inference Extension", "Model-aware routing"],
+      ["Queue batch eval jobs with Kueue", "Lower priority than interactive traffic; watch preemption happen"],
+      ["Build a Grafana dashboard", "Tokens/sec, time to first token, queue depth, cost per 1k requests"]
+    ],
+    learn: "autoscaling, scheduling priority, accelerator economics, and the vocabulary to challenge your team's capacity plans." },
+  { id: "j3", title: "A resilient MCP tool gateway with policy and tracing", phases: "Phases 2 and 4",
+    crd: "agent → <b>gateway</b> → tool → model · traced end to end",
+    summary: "A multi-tenant gateway through which agents call tools exposed as MCP servers.",
+    steps: [
+      ["Per-tenant identity with service account tokens", "Per-tool authorization with OPA or Kyverno"],
+      ["OpenTelemetry GenAI traces", "agent → gateway → tool → model, viewed in Jaeger or Tempo"],
+      ["Run the agent workflow on Temporal", "Durable execution"],
+      ["Chaos-test with Chaos Mesh", "Kill pods mid-tool-call; verify non-idempotent tools never run twice"],
+      ["Simulate a prompt-injected agent", "Show the policy layer blocking exfiltration"]
+    ],
+    learn: "zero-trust design for agents, observability and failure semantics. It also makes a strong demo for leadership reviews." }
+];
+
+const START = [
+  ["Read Borg, Omega, and Kubernetes", "About an hour"],
+  ["Start Kubernetes the Hard Way", ""],
+  ["Draft the AgentSession CRD on paper", "The API for Project 1, before any code"]
+];
+
+/* ---------- rendering ---------- */
+let done = {};
+const CHECK_SVG = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const allIds = [];
+
+function check(id, title, detail) {
+  allIds.push(id);
+  return `<li><label class="check" for="c-${id}"><input type="checkbox" id="c-${id}" data-id="${id}"><span class="box">${CHECK_SVG}</span><span class="txt">${title}${detail ? `<small>${detail}</small>` : ""}</span></label></li>`;
+}
+function fill(sel, prefix, list) {
+  document.querySelector(sel).innerHTML = list.map((x, i) => check(`${prefix}-${i}`, x[0], x[1])).join("");
+}
+
+fill('[data-group="habits"]', "h", HABITS);
+fill('[data-group="start"]', "s", START);
+
+document.getElementById("phase-list").innerHTML = PHASES.map(p => {
+  const items = p.items.map((x, i) => check(`${p.id}-${i}`, x[0], x[1])).join("");
+  const ms = check(`${p.id}-ms`, p.milestone, "");
+  return `<article class="phase" id="${p.name}">
+    <div class="phase-top"><h3>${p.title}</h3><span style="display:flex;gap:10px;align-items:center"><span class="weeks">weeks ${p.weeks}</span><span class="pill" data-pill="${p.id}">Pending</span></span></div>
+    <p>${p.intro}</p>
+    <ul class="checks">${items}</ul>
+    <div class="milestone"><span class="tag">Milestone</span><ul class="checks">${ms}</ul></div>
+  </article>`;
+}).join("");
+
+document.getElementById("reading-list").innerHTML = READING.map(g =>
+  `<div class="group"><div class="group-label">${g.label}</div><ul class="checks">${g.items.map((x, i) => check(`${g.id}-${i}`, x[0], x[1])).join("")}</ul></div>`
+).join("");
+
+document.getElementById("project-list").innerHTML = PROJECTS.map((p, n) =>
+  `<article class="project" id="project-${n + 1}">
+    <div class="phase-top"><span class="weeks">Project ${n + 1} · ${p.phases}</span><span class="pill" data-pill="${p.id}">Pending</span></div>
+    <h3>${p.title}</h3>
+    <div class="crd">${p.crd}</div>
+    <p>${p.summary}</p>
+    <ul class="checks">${p.steps.map((x, i) => check(`${p.id}-${i}`, x[0], x[1])).join("")}</ul>
+    <p class="learn"><b>What you learn:</b> ${p.learn}</p>
+  </article>`
+).join("");
+
+/* status table rows: phases, reading, projects */
+const ROWS = [
+  ...PHASES.map(p => ({ key: p.id, name: p.name, weeks: p.weeks, href: "#" + p.name, prefix: p.id + "-" })),
+  { key: "reading", name: "reading-list", weeks: "—", href: "#reading", prefixes: READING.map(g => g.id + "-") },
+  ...PROJECTS.map((p, n) => ({ key: p.id, name: `project-${n + 1}`, weeks: "—", href: `#project-${n + 1}`, prefix: p.id + "-" }))
+];
+function idsFor(r) {
+  const pre = r.prefixes || [r.prefix];
+  return allIds.filter(id => pre.some(x => id.startsWith(x)));
+}
+function statusOf(n, total) { return n === 0 ? "Pending" : n === total ? "Complete" : "Progressing"; }
+
+function render() {
+  document.querySelectorAll("input[data-id]").forEach(el => { el.checked = !!done[el.dataset.id]; });
+  document.getElementById("status-rows").innerHTML = ROWS.map(r => {
+    const ids = idsFor(r), n = ids.filter(id => done[id]).length, st = statusOf(n, ids.length);
+    const pill = document.querySelector(`[data-pill="${r.key}"]`);
+    if (pill) { pill.textContent = `${st} · ${n}/${ids.length}`; pill.dataset.st = st; }
+    return `<tr><td><a href="${r.href}">${r.name}</a></td><td>${r.weeks}</td><td>${n}/${ids.length}</td><td class="st-${st}">${st}</td></tr>`;
+  }).join("");
+  const n = allIds.filter(id => done[id]).length, pct = Math.round(100 * n / allIds.length);
+  document.getElementById("meter").style.width = pct + "%";
+  document.getElementById("total").textContent = `${n}/${allIds.length} · ${pct}%`;
+}
+
+/* ---------- persistence: account (db) when available, browser otherwise ---------- */
+const LS_KEY = "k8s-agent-plan-progress";
+function readLocal() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {}; } catch { return {}; } }
+function writeLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(done)); } catch {} }
+
+let ref = null, timer = null, writing = Promise.resolve();
+function setSave(mode, text) {
+  const s = document.getElementById("save"); s.dataset.mode = mode;
+  document.getElementById("save-text").textContent = text;
+}
+function persist() {
+  writeLocal();
+  if (!ref) return;
+  clearTimeout(timer);
+  setSave("account", "Saving…");
+  timer = setTimeout(() => {
+    const snapshot = { done: { ...done }, updatedAt: new Date().toISOString() };
+    writing = writing.then(() => ref.set(snapshot)).then(
+      () => setSave("account", "Saved to your account"),
+      () => { ref = null; setSave("local", "Saved in this browser only (your account couldn't save)"); }
+    );
+  }, 600);
+}
+
+document.addEventListener("change", e => {
+  const id = e.target?.dataset?.id; if (!id) return;
+  if (e.target.checked) done[id] = true; else delete done[id];
+  render(); persist();
+});
+
+const resetBtn = document.getElementById("reset-btn");
+let armed = false;
+resetBtn.addEventListener("click", () => {
+  if (!armed) { armed = true; resetBtn.textContent = "Click again to clear everything"; resetBtn.classList.add("danger");
+    setTimeout(() => { armed = false; resetBtn.textContent = "Clear my progress"; resetBtn.classList.remove("danger"); }, 4000); return; }
+  armed = false; resetBtn.textContent = "Clear my progress"; resetBtn.classList.remove("danger");
+  done = {}; render(); persist();
+});
+
+done = readLocal();
+render();
+
+(async () => {
+  try {
+    const c = window.claude;
+    const db = c ? await c.use("db") : null;
+    const user = c ? await c.use("user") : null;
+    const uid = user ? await user.id() : null;
+    if (!db || !uid) { setSave("local", "Saved in this browser only"); return; }
+    ref = db.collection("data/users/" + uid).doc("progress");
+    const snap = await ref.get();
+    const remote = snap.exists ? (snap.data()?.done || {}) : null;
+    if (remote) { done = remote; writeLocal(); render(); setSave("account", "Saved to your account"); }
+    else if (Object.keys(done).length) { persist(); }
+    else setSave("account", "Saved to your account");
+  } catch {
+    ref = null; setSave("local", "Saved in this browser only");
+  }
+})();
+</script>
