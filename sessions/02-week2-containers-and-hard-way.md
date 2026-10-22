@@ -2,7 +2,7 @@
 
 **Dates:** 2026-10-19 onward
 **Plan position:** Phase 0, Week 2
-**Status:** Part 1 discussed; Lab 2a (VMs), jumpbox and compute resources labs done (2026-10-21). Open: check-your-understanding answers; remove Lima containerd from node-0 and node-1 before the worker lab.
+**Status:** labs done (2026-10-21); answers reviewed and model answers recorded. Open before Session 05: remove Lima containerd from node-0 and node-1.
 
 [← Back to index](../index.md) · [Previous: Session 01, control loops](01-week1-control-loops.md)
 
@@ -269,7 +269,137 @@ limactl shell jumpbox sudo ssh-keygen -f /root/.ssh/known_hosts -R node-1
 
 ### My answers
 
-_(Write your answers here before Session 03.)_
+**Part 2, Q1** (2026-10-21): API server, scheduler, controller manager and etcd run as static pods in kind; here they will run as binaries downloaded from the internet.
+
+**Coach feedback on Q1: right on the static pods, incomplete on the rest.**
+- **The sort you skipped:**
+  - **Runs on the server:** `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`
+  - **Runs on the nodes:** `kubelet`, `kube-proxy`, `containerd` (with its shim), `runc`, the CNI plugins, plus `crictl` for debugging
+  - **Stays on the jumpbox:** `kubectl`, `etcdctl`
+- **"Binaries" isn't the difference.** In kind, those static pods ran the same programs, packaged inside container images. What changes is **who starts and supervises them**:
+  - **In kind,** the kubelet read manifests from `/etc/kubernetes/manifests` and ran each component as a container.
+  - **Here,** each one becomes a **systemd service**: a unit file in `/etc/systemd/system/` that starts the binary directly on the server with its flags, and restarts it if it crashes. The server has no kubelet and no container runtime at all.
+- **Why it matters for you:** both are real production patterns. Managed Kubernetes (EKS, GKE) hides the control plane from you entirely, and in your own clusters you choose between them. Static pods let you upgrade the control plane with Kubernetes tooling and see it with `kubectl`. systemd services avoid a circular dependency, because the control plane doesn't need a kubelet and container runtime to start.
+
+**Part 1 answers** (2026-10-21):
+1. It would be like deleting `/lib` on a regular host. The host's `/lib` doesn't help because it isn't reachable from inside the chroot.
+2. It should be CentOS, because that's what it can "see".
+3. Because ultimately they share the same kernel.
+4. It could tunnel traffic from and to undesired hosts.
+
+**Coach feedback on Part 1:**
+
+**Q1: correct reasoning; add the concrete outcome.** Python wouldn't start. Almost every Linux program is dynamically linked: before it runs, the kernel loads a helper (the dynamic loader, `ld-linux-*.so`, which lives in `/lib`), and that helper loads the shared libraries. With `/lib` gone, even `chroot rootfs /bin/bash` fails. The confusing part is the error, typically "No such file or directory", even though `/bin/bash` plainly exists. The missing file is the loader, not the program. You'll see that error again when a container image is built for the wrong platform or is missing its libraries.
+
+**Q2: incorrect, and the most important one to fix.** `uname -r` reports the **host's Ubuntu kernel**. There's no kernel in the tarball; `uname` is a system call, and the running kernel answers it with its own version. What *does* say CentOS is `/etc/os-release`, because that's a file in the tarball. So a container shows you the image's **files** and the host's **kernel**. Your Q3 answer already says this ("they share the same kernel"), so Q2 and Q3 are the same fact seen from two sides. Consequences:
+- A "CentOS container" on an Ubuntu node runs Ubuntu's kernel, with Ubuntu's kernel version, features and bugs.
+- An image that needs a newer kernel feature can fail on older nodes even though the image itself is fine.
+
+**Q3: correct.** Here's the one sentence to give your team: *"Containers share the host's kernel, so one kernel exploit from untrusted code compromises the whole node and every other workload on it. Untrusted agent code needs its own kernel boundary, such as gVisor or a microVM (Kata, Firecracker)."* Add that shared kernels aren't the only risk. Misconfiguration breaks isolation too: privileged containers, `hostPath` mounts, and auto-mounted service account tokens.
+
+**Q4: one valid risk; the bigger ones are missing.** Sharing a network namespace means both containers share one IP address and one set of ports, and reach each other on `localhost`. With an untrusted sandbox next to a credential holder:
+- **It can call the credential holder directly.** If that container exposes anything on `localhost`, such as a proxy that adds API keys or a token endpoint, the sandbox can use it with the credentials attached. This is the main risk: a *confused deputy*.
+- **Network rules can't separate them.** A NetworkPolicy applies to the whole pod, so the sandbox gets every egress destination the credential holder needs. That's how your tunneling concern happens.
+- **It may see the other container's traffic.** With the `NET_RAW` capability, which containers get by default unless a policy drops it, the sandbox can capture packets on the shared interfaces, including `localhost` traffic.
+
+**The design rule:** put untrusted code in **its own pod**, ideally on a sandboxed runtime. Have it reach credentials only through a narrow, authenticated API that decides what each call may do. This shapes Project 1 and Project 3.
+
+**Part 2, Q2** (why names must resolve before certificates): _(not answered yet)_
+
+**Part 2, Q3 answer** (2026-10-21): The administration of the hosts (VMs) where the cluster is created. It abstracts all the infrastructure nuances and lets you care only about configuring how a cluster will run.
+
+**Coach feedback on Q3: right direction, but it overstates.** A managed service takes the **control plane** off your hands. Most of the **data plane**, the nodes where your workloads run, is still yours.
+
+What it takes off your hands, all of it work you're doing by hand in this lab:
+- running and patching the control-plane machines (etcd, API server, scheduler, controller manager)
+- making them highly available across zones, and backing up and restoring etcd
+- the cluster's certificate authority and certificate rotation (Session 03)
+- upgrading the control plane, and scaling the API server under load
+- encrypting Secrets at rest, usually with the cloud's key service
+
+What it does **not** take off your hands:
+- **Worker nodes**, unless you choose a fully managed mode (GKE Autopilot, EKS Fargate or Auto Mode): OS patching, kubelet versions, node sizing, autoscaling, GPU node pools
+- **Upgrade timing and impact.** The provider upgrades the control plane, but you schedule it, test your workloads against removed APIs, and eventually get upgraded whether you're ready or not.
+- **Networking choices:** the CNI and its settings, network policies, ingress and egress design
+- **Security inside the cluster:** RBAC, admission policies, Pod Security, mapping cloud identity to Kubernetes identity, what goes in your Secrets
+- **Workloads, multi-tenancy, observability and cost**
+
+**For the Agent Platform, the hardest parts are on the "yours" side:** sandboxed runtimes on the nodes (GKE offers gVisor as GKE Sandbox; on EKS you install and run it yourself), GPU node pools, egress control for tool calls, and tenant isolation. Managed Kubernetes buys you a reliable API server, not a secure agent platform.
+
+### Model answers
+
+In chat these were numbered 1–6: Part 1 Q1–Q4 are 1–4, Part 2 Q2 is 5, and Part 2 Q3 is 6.
+
+#### Part 1: What a container really is
+
+**Q1. What happens if you delete `rootfs/lib` and start `python` in the chroot?**
+
+Python won't start. It's dynamically linked: before it runs, the kernel loads the dynamic loader (`ld-linux-*.so`, in `/lib`), which then loads Python's shared libraries, also in `/lib`. With `/lib` gone, there's no loader, so even `/bin/bash` in the chroot fails. The error is usually "No such file or directory", which is misleading: the program exists, but the loader it asks for doesn't.
+
+The host's `/lib` doesn't help because after `chroot`, every path lookup starts at `rootfs`. `/lib` now means `rootfs/lib`, and nothing outside `rootfs` can be named. An image must carry every library its programs need, or be statically linked like the Kubernetes binaries.
+
+**Q2. Whose kernel version does `uname -r` report in a CentOS chroot on an Ubuntu host?**
+
+The **host's Ubuntu kernel**. The tarball contains no kernel; it's only files. `uname` is a system call answered by the one running kernel, which reports its own version. Files from the image, like `/etc/os-release`, say CentOS. So a container shows the image's **files** but runs on the host's **kernel**: its version, features and bugs. An image that depends on a kernel feature can fail on nodes with an older kernel, even though the image itself is unchanged.
+
+**Q3. In one sentence: why isn't a container enough to sandbox untrusted agent code?**
+
+*Containers share the host's kernel, so one kernel exploit from untrusted code compromises the whole node and every workload on it; untrusted agent code needs its own kernel boundary, such as gVisor or a microVM (Kata, Firecracker).*
+
+Misconfiguration breaks container isolation too: privileged containers, `hostPath` mounts, and auto-mounted service account tokens.
+
+**Q4. Two containers share a pod's network namespace. What does that allow, and what's the risk if one is an untrusted sandbox and the other holds credentials?**
+
+It allows them to share one IP address and one set of ports, and to reach each other on `localhost`. The risks:
+- **Confused deputy:** the sandbox can call anything the credential holder serves on `localhost`, such as a proxy that attaches API keys, and borrow its authority.
+- **No network separation:** NetworkPolicy applies to the whole pod, so the sandbox gets every egress destination the credential holder needs, which also enables tunneling to hosts it shouldn't reach.
+- **Traffic capture:** with the `NET_RAW` capability, granted by default unless dropped, the sandbox can capture packets on the shared interfaces, including `localhost`.
+
+The design rule: untrusted code runs in its own pod, ideally on a sandboxed runtime, and reaches credentials only through a narrow, authenticated API.
+
+#### Part 2: Kubernetes the Hard Way
+
+**Q1. Sort the binaries by where they run. Which ran as static pods in kind, and how will they run here?**
+
+- **Server:** `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`
+- **Nodes:** `kubelet`, `kube-proxy`, `containerd` with its shim, `runc`, the CNI plugins, and `crictl` for debugging
+- **Jumpbox:** `kubectl`, `etcdctl`
+
+The four server components ran as **static pods** in kind: the kubelet read their manifests from `/etc/kubernetes/manifests` and ran each one as a container. Here, each runs as a **systemd service**: a unit file starts the binary directly on the server with its flags and restarts it if it crashes. The server has no kubelet or container runtime. Static pods make the control plane visible to `kubectl` and upgradable with Kubernetes tooling; systemd services avoid needing a working kubelet and runtime before the control plane can start.
+
+**Q2. Why must every machine resolve every other machine's hostname before you generate certificates?** *(question 5 in chat)*
+
+Because **a certificate binds a key to names**, and the names are fixed when the certificate is signed.
+
+When a component connects to another over TLS, it checks two things:
+1. The certificate is signed by a CA it trusts (`ca.crt`).
+2. **The name it connected to appears in the certificate**, in its Subject Alternative Names (SANs), a list of DNS names and IP addresses.
+
+So if the kubelet on node-0 dials `https://server.kubernetes.local:6443`, the API server's certificate must list `server.kubernetes.local`, or the connection is refused. That's why names come first:
+- **Names are baked in at signing.** You have to decide each machine's canonical names before you generate certificates. Rename a machine later and its certificate must be reissued.
+- **Clients need to resolve the names they'll verify.** The kubeconfigs in Session 03 point at `server.kubernetes.local`. If that name doesn't resolve, clients either can't connect or fall back to IP addresses, which then also have to be in the certificate.
+- **Identity must match.** The kubelet's client certificate says `system:node:node-0`, and the node registers under its hostname, `node-0`. If they disagree, the API server's Node Authorizer rejects it. That's why stable hostnames across restarts mattered.
+- **It works in both directions.** The API server also connects *to* kubelets, for `kubectl logs` and `exec`, by node name, so the server must resolve the nodes too.
+
+**The SSH comparison:** SSH remembered node-1's key *under its name* the first time it connected (trust on first use) and refused when the key changed. TLS ties keys to names the same way, but with no first-use prompt: the CA vouches for the key-to-name binding in advance, which is what lets thousands of components trust each other automatically.
+
+**Q3. What does a managed control plane (EKS, GKE) take off your hands, and what doesn't it?** *(question 6 in chat)*
+
+It takes the **control plane**:
+- running and patching the etcd, API server, scheduler and controller manager machines
+- high availability across zones, plus etcd backups and restores
+- the cluster CA and certificate rotation
+- control-plane upgrades and API server scaling
+- encrypting Secrets at rest, usually via the cloud's key service
+
+It doesn't take most of the **data plane** or anything inside the cluster:
+- **Worker nodes:** OS patching, kubelet versions, sizing, autoscaling, GPU pools. The exception is fully managed modes like GKE Autopilot or EKS Auto Mode.
+- **Upgrade timing and impact:** scheduling, and testing workloads against removed APIs
+- **Networking:** CNI choice and settings, network policies, ingress and egress
+- **Security inside the cluster:** RBAC, admission policies, Pod Security, identity mapping, Secrets content
+- **Workloads, multi-tenancy, observability and cost**
+
+For an Agent Platform, the hardest parts sit on that second list: sandboxed runtimes, GPU nodes, egress control for tool calls, and tenant isolation.
 
 ---
 
