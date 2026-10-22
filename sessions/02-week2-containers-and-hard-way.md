@@ -183,6 +183,19 @@ Work through these two docs, with the adjustments above:
 
 The kind cluster from Session 01 isn't needed anymore; delete it if you want the memory back with `kind delete cluster --name learn`.
 
+### What happened, step by step
+
+![Session 02 setup, animated through each step](../assets/session02-setup-animated.svg)
+
+The animation cycles through nine steps, 6 seconds each (54 seconds per loop): the four VMs, downloading and sorting the binaries, `machines.txt`, root SSH, hostnames, the restart problem, its fix, and what Session 03 builds on top. Amber marks what's active in a step; red marks what broke on restart.
+
+**The whole session in three sentences:**
+1. **You built the machines:** four VMs, each with its own kernel, on one network.
+2. **You set up the jumpbox as the control point:** it holds every binary sorted by destination, knows every machine (`machines.txt`), and can run anything as root on them (SSH key).
+3. **You gave each machine a stable identity:** a real hostname and an SSH host key that survive a restart.
+
+**What hasn't happened yet:** no Kubernetes component is running anywhere. The binaries sit unused in folders on the jumpbox. Session 03 creates the certificates; Sessions 04 and 05 copy the binaries out and start them.
+
 ### Progress log
 
 **Your cluster machines** (Lima `user-v2` network):

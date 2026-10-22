@@ -17,3 +17,4 @@ A 24-week coaching plan for mastering Kubernetes for cloud and agentic workloads
 - [Lab 1 cluster diagram, animated (SVG)](assets/lab1-cluster-animated.svg)
 - [Lab 1 cluster diagram, static (SVG)](assets/lab1-cluster.svg)
 - [Lab 1 cluster diagram, interactive (open in a browser)](assets/lab1-cluster-interactive.html)
+- [Session 02 setup walkthrough, animated (SVG)](assets/session02-setup-animated.svg)
