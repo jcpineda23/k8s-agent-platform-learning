@@ -10,6 +10,7 @@ A 24-week coaching plan for mastering Kubernetes for cloud and agentic workloads
 |---|---|---|---|---|
 | 00 | 2026-10-17 | [The learning plan](sessions/00-learning-plan.md) | Planning | Done |
 | 01 | 2026-10-17 to 18 | [Kubernetes is a set of control loops](sessions/01-week1-control-loops.md) | Phase 0 · Week 1 | Homework reviewed; model answers recorded |
+| 02 | 2026-10-19 onward | [From containers to a cluster you build by hand](sessions/02-week2-containers-and-hard-way.md) | Phase 0 · Week 2 | Labs done; answers open |
 
 ## Assets
 
