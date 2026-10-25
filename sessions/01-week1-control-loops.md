@@ -8,6 +8,58 @@
 
 ---
 
+## Before you start: key terms
+
+No prior knowledge assumed. Read this first; the rest of the session builds on these words.
+
+### The big picture
+
+- **Container:** a packaged program plus everything it needs to run (libraries, files), started as an isolated process. Think of a shipping container: the same box runs the same way on any machine.
+- **Kubernetes:** software that runs containers across many machines for you. You describe what you want ("3 copies of this web server, always"), and Kubernetes keeps it that way, restarting and moving things as machines fail.
+- **Cluster:** the group of machines Kubernetes manages, treated as one big computer.
+- **Node:** one machine in the cluster. **Worker nodes** run your containers; the **control plane** nodes run Kubernetes itself.
+- **Control plane:** the "brain" of the cluster: the components that store what you want and decide what to do about it. Its parts are below.
+
+### The control plane's parts
+
+- **API server:** the front door. Every request, from you or from any component, goes through it. It checks who you are, whether you're allowed, and whether the request makes sense, then stores the result.
+- **etcd:** the cluster's database. It stores every record: every pod, deployment and setting. Only the API server talks to it.
+- **Controller:** a background worker that watches one type of record and makes the real world match it. Like a thermostat: it compares the room's temperature (actual) with the setting (desired) and acts on the difference, forever.
+- **Controller manager:** one program that runs dozens of built-in controllers.
+- **Scheduler:** the controller that picks which node each new pod runs on.
+
+### On each node
+
+- **kubelet:** the agent on every node. It watches for pods assigned to its node and makes sure their containers are running.
+- **Container runtime:** the software the kubelet asks to actually start containers (containerd, in this course).
+
+### The objects you work with
+
+- **Pod:** the smallest thing Kubernetes runs: one container, or a few that must live together. Pods are disposable; they get replaced, not repaired.
+- **ReplicaSet:** a record that says "keep N identical pods running". Its controller creates or deletes pods to match N.
+- **Deployment:** a record one level up that manages ReplicaSets, so you can roll out a new version gradually and roll back.
+- **Namespace:** a named folder inside the cluster that groups objects, such as one per team or customer.
+- **Label and selector:** labels are tags on objects (`app=web`); selectors find objects by tag. A ReplicaSet finds "its" pods by selector.
+- **ownerReferences:** a field saying "this object belongs to that one" (a pod belongs to a ReplicaSet). It's how Kubernetes knows what to clean up.
+- **Garbage collection:** the controller that deletes objects whose owner is gone. Delete a Deployment and its ReplicaSets and pods disappear too.
+
+### How the pieces cooperate
+
+- **Desired state vs. actual state:** what you asked for (stored in etcd) vs. what's really running. All of Kubernetes is about closing the gap.
+- **Reconciliation (control loop):** a controller's endless cycle: look at desired state, look at actual state, act on the difference, repeat.
+- **Watch:** a subscription to changes. Instead of asking "anything new?" over and over, a component keeps a connection open and the API server pushes each change as it happens.
+- **Level-triggered vs. edge-triggered:** an edge-triggered system reacts to *events* ("a pod was deleted", so create one). A level-triggered system reacts to the *current state* ("I see 2 pods, I want 3"). Kubernetes controllers are level-triggered, so a missed event never matters: the next look at the state fixes it.
+- **resourceVersion and optimistic concurrency:** every object carries a version number that changes on each write. An update based on an old version is rejected with a conflict, so two writers can't silently overwrite each other. No locks are needed.
+- **Static pod:** a pod the kubelet starts from a file on its own disk, without asking the API server. That's how the control plane can run as pods before the API server exists.
+
+### Tools
+
+- **kubectl:** the command-line tool for talking to the API server.
+- **kind ("Kubernetes in Docker"):** a tool that runs a whole cluster on your laptop, with each "node" being a Docker container. Used for learning and testing.
+- **kube-system:** the namespace where Kubernetes keeps its own components.
+
+---
+
 ## Lab environment check
 
 Checked on your Mac (Apple Silicon, 48 GB RAM):
@@ -354,6 +406,34 @@ What stops is everything that needs a change:
 - Kubelets can't report status, and nodes can't be marked NotReady.
 
 The cluster freezes in its last known state. It doesn't fall over, but it can't heal itself either. This is why managed Kubernetes runs several API server replicas, and why API server availability is the control-plane SLO that matters most.
+
+
+## Resources
+
+### Books
+- *Kubernetes: Up and Running*, 3rd ed. (Burns, Beda, Hightower, Evenson). Chapters: "Introduction", "Pods", "Labels and Annotations", "ReplicaSets", "Deployments". The gentlest path through this session's objects.
+- *Kubernetes Patterns*, 2nd ed. (Ibryam, Huß). Chapters: "Declarative Deployment" and "Controller". Why "describe the goal, let a loop get there" works.
+- *Programming Kubernetes* (Hausenblas, Schimanski). Chapter 1, "Introduction", and Chapter 2, "Kubernetes API Basics": watches, resource versions and how controllers are built, for when you want the next level down.
+
+### Papers
+- [Large-scale cluster management at Google with Borg](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/) (EuroSys 2015). Kubernetes' predecessor.
+- *Omega: flexible, scalable schedulers for large compute clusters* (EuroSys 2013). The shared-state design that inspired the API server plus independent controllers.
+- [Borg, Omega, and Kubernetes](https://queue.acm.org/detail.cfm?id=2898444) (ACM Queue 2016). Short, and the most important one: why Kubernetes is built as a database plus control loops.
+
+### Articles and docs
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/): the control plane and node parts in one page.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/): the control-loop idea, with the thermostat analogy.
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/): what you created in the lab.
+- [Garbage Collection](https://kubernetes.io/docs/concepts/architecture/garbage-collection/): owner references and cascading deletion.
+- [Kubernetes API Concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/): watches and resource versions.
+- [Static Pods](https://kubernetes.io/docs/tasks/configure-pod-container/static-pod/): how the control plane bootstraps.
+- [Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/): how pods get evicted from a dead node (homework question 4).
+- [kind quick start](https://kind.sigs.k8s.io/docs/user/quick-start/): the tool used in the lab.
+
+### Videos
+- [The Illustrated Children's Guide to Kubernetes](https://www.youtube.com/watch?v=4ht22ReBjno) (Deis, about 8 min). The friendliest possible first look at pods, ReplicaSets and Services.
+- [Kubernetes Deconstructed: Understanding Kubernetes by Breaking It Down](https://www.youtube.com/watch?v=90kZRyPcRZw) (Carson Anderson, KubeCon). Walks through each component and how they cooperate, with clear visuals. The best match for this session.
+- [Kubernetes: The Documentary, Part 1](https://www.youtube.com/watch?v=BE77h7dmoQU) and [Part 2](https://www.youtube.com/watch?v=318elIq37PE) (CultRepo, about 25 and 30 min). The history: Borg, Docker, and why Google open-sourced Kubernetes.
 
 ---
 

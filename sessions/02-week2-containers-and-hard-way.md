@@ -8,6 +8,62 @@
 
 ---
 
+## Before you start: key terms
+
+No prior knowledge assumed beyond Session 01's terms.
+
+### What a container really is
+
+- **Operating system kernel:** the core program of an operating system. It controls the hardware and decides what every program may do. Programs ask it for things (open a file, send data) through **system calls** (*syscalls*).
+- **Userland:** everything that isn't the kernel: programs, libraries, configuration files. A Linux "distribution" (Debian, Ubuntu, CentOS) is mostly a choice of userland.
+- **Container image:** a container's files, packaged as a set of tarballs (compressed archives). It contains userland only, never a kernel.
+- **Root filesystem (rootfs):** the directory tree a process sees as `/`. For a container, it's the unpacked image.
+- **Shared libraries and the dynamic loader:** most programs don't contain all their own code; they load shared libraries (in `/lib`) when they start. A small helper, the dynamic loader, does that loading. If it's missing, the program can't start.
+- **chroot:** a system call that changes where `/` points for a process. The process can no longer see files outside its new root. It isolates files only, nothing else.
+- **pivot_root:** a stronger replacement for chroot that real container runtimes use: it swaps the root of the filesystem itself, leaving nothing above it to escape to.
+- **Namespaces:** a kernel feature that gives a process its own private view of one part of the system. Types include **PID** (its own process list), **network** (its own network interfaces and IP), **mount** (its own filesystem layout), **UTS** (its own hostname), **IPC** and **user** (its own user IDs). `unshare` creates new namespaces; `nsenter` joins existing ones.
+- **cgroups (control groups):** a kernel feature that limits how much CPU, memory and disk I/O a group of processes may use.
+- **Capabilities:** root's powers split into separate pieces (like `NET_RAW`, the power to craft raw network packets), so a process can get only the ones it needs.
+- **seccomp:** a filter that blocks a process from making certain system calls.
+- **Container, precisely:** an ordinary process running with its own root filesystem, namespaces, cgroup limits, and reduced capabilities. It still shares the host's kernel.
+
+### Stronger isolation
+
+- **Virtual machine (VM):** a simulated computer with its own kernel, run by a **hypervisor**. A kernel bug in one VM can't reach another.
+- **gVisor:** a "user-space kernel" from Google. It intercepts a container's system calls and handles most of them itself, so the container barely touches the real kernel.
+- **Kata Containers** and **Firecracker:** ways to run each container (or pod) inside its own lightweight VM, with its own kernel, while it still looks like a normal container to Kubernetes.
+
+### Building the lab
+
+- **Kubernetes the Hard Way:** a famous tutorial by Kelsey Hightower that builds a cluster by hand, with no installer.
+- **Lima:** a tool that runs Linux VMs on a Mac.
+- **Debian 12:** the Linux distribution the lab expects.
+- **Jumpbox:** an administration machine you work from, which holds the tools and files and connects to the other machines.
+- **cloud-init:** a program that configures a VM the first time it boots (hostname, users, SSH keys). It tracks "first boot" with an **instance ID**, which is why a new ID made it re-run its setup.
+- **SSH:** the standard way to log in to a remote machine and run commands. **SSH keys** let you log in without a password: the private key stays with you, the public key goes on the server in `authorized_keys`.
+- **Host key and known_hosts:** each server has its own key proving its identity; your SSH client remembers it in `known_hosts`, and refuses to connect if it changes ("REMOTE HOST IDENTIFICATION HAS CHANGED").
+- **Hostname, FQDN and /etc/hosts:** a hostname is a machine's short name (`node-0`); a fully qualified domain name (FQDN) is its full name (`node-0.kubernetes.local`); `/etc/hosts` is a local file mapping names to IP addresses.
+- **systemd and systemd services:** the program that starts and supervises other programs on Linux. A *service* is a program it keeps running and restarts if it crashes. In the lab, the control plane will run as services rather than static pods.
+- **Static binary:** a program compiled with everything it needs inside one file, with no shared libraries. All Kubernetes components are built this way.
+
+### The node's software stack
+
+- **containerd:** the container runtime the kubelet talks to. It manages images and containers.
+- **runc:** the low-level tool that actually creates a container (namespaces, cgroups, root filesystem) and starts its process.
+- **Shim (`containerd-shim-runc-v2`):** a small process per container, between containerd and runc. Because the shim is the container's parent, containers keep running if containerd restarts. Sandboxes like gVisor and Kata plug in by providing their own shim.
+- **CRI (Container Runtime Interface):** the standard API the kubelet uses to talk to any container runtime. **crictl** is a debugging tool that speaks it.
+- **CNI (Container Network Interface):** the standard for plugins that give each pod its network connection and IP address. The **CNI plugins** (`bridge`, `loopback`, `host-local`) implement it.
+- **kube-proxy:** the component on each node that programs network rules so traffic to a Service reaches one of its pods.
+- **Pod subnet (pod CIDR):** a range of IP addresses a node hands out to its pods, like `10.200.0.0/24` (256 addresses).
+- **RuntimeClass:** a Kubernetes object that lets a pod choose which runtime runs it, such as runc or gVisor.
+
+### Managed Kubernetes
+
+- **Managed Kubernetes (EKS, GKE, AKS):** cloud services where the provider runs the control plane for you. You still run and secure the worker nodes and everything inside the cluster.
+- **Data plane:** the worker nodes and the workloads on them, as opposed to the control plane.
+
+---
+
 ## Where we are
 
 Session 01 showed Kubernetes from the outside: control loops talking through the API server. This session goes one level down on each side:
@@ -400,6 +456,29 @@ It doesn't take most of the **data plane** or anything inside the cluster:
 - **Workloads, multi-tenancy, observability and cost**
 
 For an Agent Platform, the hardest parts sit on that second list: sandboxed runtimes, GPU nodes, egress control for tool calls, and tenant isolation.
+
+
+## Resources
+
+### Books
+- *Container Security* (Liz Rice). Chapters: "Linux System Calls, Permissions, and Capabilities", "Control Groups", "Container Isolation", "Virtual Machines" and "Container Images". The clearest explanation of what a container is made of, and the best single book for this session.
+- *Production Kubernetes* (Rosso, Lander, Brand, Harris). Chapter 3, "Container Runtime": containerd, runc, the CRI and sandboxed runtimes from a platform team's point of view.
+- *Kubernetes: Up and Running*, 3rd ed. Chapter: "Creating and Running Containers".
+
+### Papers
+- [Firecracker: Lightweight Virtualization for Serverless Applications](https://www.usenix.org/conference/nsdi20/presentation/agache) (NSDI 2020). How AWS runs each Lambda function in its own microVM. The page includes the talk video.
+- [The True Cost of Containing: A gVisor Case Study](https://www.usenix.org/conference/hotcloud19/presentation/young) (HotCloud 2019). What gVisor's extra isolation costs in performance.
+
+### Articles and docs
+- [Containers from Scratch](https://ericchiang.github.io/post/containers-from-scratch/) (Eric Chiang). The article used in Part 1.
+- [namespaces(7)](https://man7.org/linux/man-pages/man7/namespaces.7.html) and [cgroups(7)](https://man7.org/linux/man-pages/man7/cgroups.7.html) (Linux manual pages). The reference for each namespace type and for resource limits.
+- [Container Runtime Interface (CRI)](https://kubernetes.io/docs/concepts/architecture/cri/) and [Runtime Class](https://kubernetes.io/docs/concepts/containers/runtime-class/) (Kubernetes docs). How the kubelet talks to runtimes, and how a pod picks one.
+- [Network Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/network-plugins/) (Kubernetes docs). Where CNI fits.
+- [gVisor documentation](https://gvisor.dev/docs/) and [Kata Containers](https://katacontainers.io/). The two sandboxing options for agent code.
+- [Kubernetes the Hard Way](https://github.com/kelseyhightower/kubernetes-the-hard-way) and [Lima documentation](https://lima-vm.io/docs/). The lab's tutorial and VM tool.
+
+### Videos
+- [Containers From Scratch](https://www.youtube.com/watch?v=8fi7uSYlOdc) (Liz Rice, GOTO 2018, about 40 min). She builds a container live in Go, step by step: namespaces, chroot, cgroups. The video version of Part 1, and the best video for this session.
 
 ---
 

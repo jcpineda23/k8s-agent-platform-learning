@@ -1,0 +1,110 @@
+# AgentSession: one isolated sandbox where an agent runs code.
+# Draft v1alpha1 for Session 04. Users set spec; only the controller sets status.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentsessions.agents.example.dev
+spec:
+  group: agents.example.dev
+  scope: Namespaced            # one namespace per tenant
+  names:
+    kind: AgentSession
+    plural: agentsessions
+    singular: agentsession
+    shortNames: [as]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}             # status is written through its own endpoint
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: TTL
+          type: integer
+          jsonPath: .spec.ttlSeconds
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [image]
+              x-kubernetes-validations:
+                - rule: "!has(self.idleTimeoutSeconds) || self.idleTimeoutSeconds <= self.ttlSeconds"
+                  message: "idleTimeoutSeconds must not exceed ttlSeconds"
+              properties:
+                image:
+                  type: string
+                  description: Container image the agent's code runs in.
+                  minLength: 1
+                runtime:
+                  type: string
+                  description: Isolation level. gvisor gives the sandbox its own user-space kernel.
+                  enum: [gvisor, runc]
+                  default: gvisor
+                ttlSeconds:
+                  type: integer
+                  description: Hard limit on the session's lifetime.
+                  minimum: 60
+                  maximum: 86400
+                  default: 3600
+                idleTimeoutSeconds:
+                  type: integer
+                  description: End the session after this long without activity.
+                  minimum: 60
+                resources:
+                  type: object
+                  properties:
+                    cpu:
+                      type: string
+                      default: "500m"
+                    memory:
+                      type: string
+                      default: "512Mi"
+                egress:
+                  type: object
+                  description: Network destinations the sandbox may reach. Empty means no network.
+                  properties:
+                    allowedDomains:
+                      type: array
+                      maxItems: 20
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Ready, Idle, Terminating, Terminated, Failed]
+                podName:
+                  type: string
+                startedAt:
+                  type: string
+                  format: date-time
+                lastActivityAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type: {type: string}
+                      status: {type: string, enum: ["True", "False", "Unknown"]}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}

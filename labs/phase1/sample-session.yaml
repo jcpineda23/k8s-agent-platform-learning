@@ -1,0 +1,13 @@
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata:
+  name: research-task-42
+  namespace: tenant-acme
+spec:
+  image: python:3.12-slim
+  ttlSeconds: 1800
+  idleTimeoutSeconds: 300
+  egress:
+    allowedDomains:
+      - pypi.org
+      - api.github.com

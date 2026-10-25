@@ -2,9 +2,58 @@
 
 **Dates:** 2026-10-21 onward
 **Plan position:** Phase 0, Week 3 · *Kubernetes the Hard Way* labs 04–06
-**Status:** labs 04–06 done (2026-10-23). Open: prediction exercise and check-your-understanding answers.
+**Status:** labs 04–06 done (2026-10-23). *Kubernetes the Hard Way* stopped here by decision (see the end of this file). Questions optional.
 
 [← Back to index](../index.md) · [Previous: Session 02](02-week2-containers-and-hard-way.md)
+
+---
+
+## Before you start: key terms
+
+No prior knowledge assumed beyond Sessions 01–02.
+
+### Keys and certificates
+
+- **Public-key cryptography:** each party has a pair of keys. The **private key** is kept secret; the **public key** is shared freely. Something signed with the private key can be verified by anyone holding the public key, and only the private key's owner could have produced it.
+- **Digital signature:** proof that a specific private key vouched for a piece of data, and that the data hasn't changed since.
+- **Certificate (X.509 certificate):** a small document that says "this public key belongs to this name", signed by someone others trust. Like an ID card: a photo (the public key), a name, and a stamp from an authority.
+- **Certificate authority (CA):** the trusted signer of certificates. If you trust the CA, you trust every certificate it signed. Its own certificate is **self-signed**: nothing vouches for it; you trust it because you installed it.
+- **CA private key (`ca.key`):** the key the CA signs with. Whoever holds it can create any identity, so it's the most sensitive file in a cluster.
+- **Certificate signing request (CSR):** a request that says "please sign a certificate for my public key, with these names". You keep your private key; only the request goes to the CA.
+- **Common Name (CN) and Organization (O):** fields in a certificate's subject. Kubernetes reads the CN as the **username** and the O as the **group**.
+- **Subject Alternative Names (SANs):** the list of DNS names and IP addresses a certificate is valid for. A client connecting to a server checks that the name it dialed is in this list.
+- **Expiry:** every certificate has a "not after" date. After it, nobody accepts it, and if the CA itself expires, the whole cluster stops trusting itself.
+- **Revocation:** cancelling a certificate before it expires. Kubernetes has no way to revoke client certificates, which is why long-lived admin certificates are dangerous.
+
+### Secure connections
+
+- **TLS (Transport Layer Security):** the protocol that encrypts network connections and proves the server's identity. It's the "S" in HTTPS.
+- **Mutual TLS (mTLS):** TLS where *both* sides present certificates, so the server also learns who the client is. Every Kubernetes component connection uses it.
+- **Trust on first use (TOFU):** SSH's approach: trust a server's key the first time you see it and complain if it ever changes. A CA replaces this with trust arranged in advance.
+
+### Who you are and what you may do
+
+- **Authentication (authn):** proving who you are. In this lab: a client certificate.
+- **Authorization (authz):** deciding what you're allowed to do once identified.
+- **RBAC (role-based access control):** Kubernetes' main authorization system. A **Role** lists allowed actions ("create pods in namespace X"); a **RoleBinding** grants a Role to a user or group. **ClusterRole** and **ClusterRoleBinding** do the same cluster-wide.
+- **Node Authorizer:** a special authorizer that limits each kubelet to its own node's pods and the data they use.
+- **system:masters:** a built-in group that bypasses all authorization. Anyone in it is a superuser.
+- **Service account:** an identity for *software* running in pods, rather than for people. A pod proves it with a **service account token**, a signed **JWT** (JSON Web Token: a small signed document of claims).
+- **Workload identity:** the general idea of software proving who it is, to the cluster or to outside services such as cloud APIs, without long-lived passwords.
+
+### Connecting to a cluster
+
+- **kubeconfig:** a file that tells a client which API server to connect to, how to recognize it (the CA certificate), and who you are (your certificate and key, or a way to get a token). Because it can contain a private key, a kubeconfig is a credential.
+- **Context:** a named combination of cluster and user inside a kubeconfig.
+- **Short-lived token:** a credential that expires within minutes or hours. Managed Kubernetes kubeconfigs fetch these from your cloud login instead of embedding keys.
+
+### Protecting stored data
+
+- **Secret:** a Kubernetes object for sensitive data like passwords and API keys. By default it's stored in etcd only **base64-encoded**, which is a reversible text format, not encryption.
+- **Encryption at rest:** encrypting data where it's stored (etcd's disk and backups), so a stolen disk reveals nothing.
+- **Encryption provider:** how the API server encrypts. `aescbc` uses a key from a local file; `identity` means no encryption.
+- **KMS (key management service) and envelope encryption:** the production approach. A cloud key service holds the master key, which never touches the server's disk; it encrypts the data keys that encrypt your Secrets.
+- **Key rotation:** replacing an encryption key or certificate with a new one, without losing access to what the old one protected.
 
 ---
 
@@ -168,7 +217,7 @@ Generated with `ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)` and `envsubs
 - **The limit:** the key sits on the same server as etcd. It protects a stolen disk or backup, not a compromised server. Production uses the **KMS provider**, where the cloud's key service holds the key and it never touches the server's disk (EKS and GKE "envelope encryption"). Current Kubernetes docs steer away from `aescbc` toward KMS v2.
 - **To verify in Session 04:** create a Secret and read its raw bytes from etcd with `etcdctl`. They should start with `k8s:enc:aescbc:v1:key1`.
 
-## Prediction exercise *(to test in Session 04)*
+## Prediction exercise *(untested; Hard Way stopped before the API server ran)*
 
 Predict what happens, and why, when:
 1. A client connects to the API server at `https://192.168.104.3:6443` instead of `server.kubernetes.local`.
@@ -189,4 +238,48 @@ _(Write your answers here.)_
 
 ---
 
-**Next:** Lab 05 (kubeconfigs) and Lab 06 (encryption config), then the Session 04 control-plane labs.
+## Decision: stop *Kubernetes the Hard Way* here (2026-10-23)
+
+**Question raised:** isn't this too much detail for an engineering manager?
+
+**Answer:** partly yes. Typing `openssl` and `kubectl config` commands and fighting Lima's quirks is engineer-level mechanics. What matters for a manager is the *consequences*, because each maps to a decision you own or sign off on:
+
+| What the labs showed | The decision it informs |
+|---|---|
+| Containers share the host kernel | Whether agent-generated code may run in plain containers, or needs gVisor or microVMs |
+| `system:masters` bypasses permissions and can't be revoked | Access policy: why "just give the team admin" is a 10-year, unrevokable risk |
+| Whoever holds `ca.key` controls the cluster | Build vs. buy, and the threat model |
+| A kubeconfig is a credential; production uses short-lived tokens | How agents authenticate to the cluster and to tools |
+| Only Secrets are encrypted, and only against disk theft | What you can honestly tell security reviewers and auditors |
+| Certificates bind names; dialing by IP fails | Recognizing "x509: certificate is valid for X, not Y" during incidents |
+
+**Decision:** stop after Lab 06 and move to Phase 1. The identity model, the most important lesson of the remaining labs, is already learned. Skipped: starting etcd and the control plane, worker nodes, pod networking and the smoke test.
+
+**New approach from here:** questions ask what you'd *decide, ask or block*, not how things work; depth is spent where the Agent Platform's risk is (sandboxing, identity, multi-tenancy, GPU scheduling), shallow elsewhere; Claude runs mechanical steps.
+
+The four predictions above stay untested; the check-your-understanding questions are optional.
+
+
+## Resources
+
+### Books
+- *Production Kubernetes* (Rosso, Lander, Brand, Harris). Chapter 7, "Secret Management", and Chapter 10, "Identity": encryption at rest, KMS, user and workload identity, from a platform team's point of view. The best match for this session.
+- *Kubernetes: Up and Running*, 3rd ed. Chapters: "ConfigMaps and Secrets" and "Role-Based Access Control".
+- *Hacking Kubernetes* (Martin, Hausenblas). How attackers abuse exactly these weak points: stolen kubeconfigs, over-broad permissions, unencrypted Secrets.
+
+### Articles and docs
+- [Controlling Access to the Kubernetes API](https://kubernetes.io/docs/concepts/security/controlling-access/): the authentication → authorization → admission sequence on one page. Start here.
+- [PKI certificates and requirements](https://kubernetes.io/docs/setup/best-practices/certificates/): every certificate a cluster needs, and why.
+- [Authenticating](https://kubernetes.io/docs/reference/access-authn-authz/authentication/): client certificates, tokens and other methods.
+- [Using RBAC Authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) and [Node Authorization](https://kubernetes.io/docs/reference/access-authn-authz/node/).
+- [Organizing Cluster Access Using kubeconfig Files](https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/).
+- [Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/): workload identity inside the cluster.
+- [Encrypting Confidential Data at Rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) and [Using a KMS provider](https://kubernetes.io/docs/tasks/administer-cluster/kms-provider/).
+- [What is an SSL certificate?](https://www.cloudflare.com/learning/ssl/what-is-an-ssl-certificate/) (Cloudflare) and [How It Works](https://letsencrypt.org/how-it-works/) (Let's Encrypt): plain-language introductions to certificates and CAs.
+
+### Videos
+- [TLS Handshake Explained](https://www.youtube.com/watch?v=86cQJ0MMses) (Computerphile). How a client and server use certificates to set up a secure connection.
+
+---
+
+**Next:** [Phase 1, Session 04](../index.md#phase-1-plan): extending Kubernetes with your own APIs.
