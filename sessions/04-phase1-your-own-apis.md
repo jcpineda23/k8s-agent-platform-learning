@@ -121,7 +121,345 @@ Design choices in the draft:
 - **A namespace is a tenant.**
 - **Status** has `phase` (Pending, Ready, Idle, Terminating, Terminated, Failed), `conditions`, `podName`, `startedAt`, `lastActivityAt` and `observedGeneration`.
 
-## What the lab showed (kind cluster `learn`, Kubernetes v1.37)
+## Lab steps
+
+Every command from the lab, in order, with the output to expect and what it means. Run them from the learning-log folder (the one containing `labs/`). They use the `learn` kind cluster from Session 01; `--context kind-learn` makes sure each command goes to that cluster.
+
+### Step 0 (optional): start clean
+
+The lab's objects are still in the cluster from 2026-10-23. To run everything from scratch, delete them first. Deleting the CRD also deletes every `AgentSession`; deleting the namespace deletes everything in it.
+
+```bash
+kubectl --context kind-learn delete namespace tenant-acme --ignore-not-found
+```
+
+```bash
+kubectl --context kind-learn delete crd agentsessions.agents.example.dev --ignore-not-found
+```
+
+### Step 1: Install the CRD
+
+```bash
+kubectl --context kind-learn apply -f labs/phase1/agentsession-crd.yaml
+```
+
+Expected output:
+
+```
+customresourcedefinition.apiextensions.k8s.io/agentsessions.agents.example.dev created
+```
+
+**What it means:** you sent the API server a *definition*: "accept a new record type called `AgentSession`, with these fields and rules." In table terms, you created a new table. Nothing runs yet.
+
+### Step 2: Wait until the API server accepts it
+
+```bash
+kubectl --context kind-learn wait --for condition=established crd/agentsessions.agents.example.dev --timeout=30s
+```
+
+Expected output:
+
+```
+customresourcedefinition.apiextensions.k8s.io/agentsessions.agents.example.dev condition met
+```
+
+**What it means:** "established" is a condition on the CRD itself: the API server has finished setting up the new endpoint and is ready to accept `AgentSession` objects. It usually takes about a second.
+
+### Step 3: Confirm Kubernetes knows the new type
+
+```bash
+kubectl --context kind-learn api-resources --api-group=agents.example.dev
+```
+
+Expected output:
+
+```
+NAME            SHORTNAMES   APIVERSION                    NAMESPACED   KIND
+agentsessions   as           agents.example.dev/v1alpha1   true         AgentSession
+```
+
+**What it means:** the API server now lists `agentsessions` next to built-in types like pods. `as` is the short name, `v1alpha1` the version, and `NAMESPACED: true` means each session lives in a namespace, which is how tenants are separated.
+
+### Step 4: Read the documentation Kubernetes generated
+
+```bash
+kubectl --context kind-learn explain agentsession.spec.runtime
+```
+
+Expected output (start):
+
+```
+GROUP:      agents.example.dev
+KIND:       AgentSession
+VERSION:    v1alpha1
+
+FIELD: runtime <string>
+ENUM:
+    gvisor
+    runc
+```
+
+**What it means:** `kubectl explain` works for your type exactly as for built-in ones, generated from the CRD's schema. Users can discover the API without separate docs.
+
+If you get `couldn't find resource`, wait a few seconds and retry: kubectl keeps a cached list of API types, which can lag behind a brand-new CRD.
+
+### Step 5: Create a tenant and a session
+
+```bash
+kubectl --context kind-learn create namespace tenant-acme
+```
+
+```bash
+kubectl --context kind-learn apply -f labs/phase1/sample-session.yaml
+```
+
+Expected output:
+
+```
+namespace/tenant-acme created
+agentsession.agents.example.dev/research-task-42 created
+```
+
+**What it means:** the namespace `tenant-acme` represents one customer. The session `research-task-42` is a record (a "row") in the new table. The API server validated it against the schema and stored it in etcd.
+
+### Step 6: List it
+
+```bash
+kubectl --context kind-learn get agentsessions -n tenant-acme
+```
+
+Expected output:
+
+```
+NAME               PHASE   RUNTIME   TTL    AGE
+research-task-42           gvisor    1800   0s
+```
+
+**What it means:**
+- **The columns** (PHASE, RUNTIME, TTL) come from the CRD's `additionalPrinterColumns`.
+- **RUNTIME says `gvisor`** although `sample-session.yaml` never set it: the schema's default was applied when the object was stored.
+- **PHASE is empty** because phase is part of `status`, and only a controller writes status. There's no controller yet.
+
+### Step 7: See exactly what was stored
+
+```bash
+kubectl --context kind-learn get agentsession research-task-42 -n tenant-acme -o yaml
+```
+
+Expected `spec` section:
+
+```yaml
+spec:
+  egress:
+    allowedDomains:
+    - pypi.org
+    - api.github.com
+  idleTimeoutSeconds: 300
+  image: python:3.12-slim
+  runtime: gvisor
+  ttlSeconds: 1800
+```
+
+**What it means:**
+- `runtime: gvisor` was added by defaulting.
+- **`resources` is missing**, even though the CRD gives `cpu` and `memory` defaults. Defaults inside a nested object apply only when the user includes that object. So this session has **no resource limits**: the bug that led to decision 2.
+- There's no `status` section at all: nothing has reported on this session.
+- Above `spec`, the `metadata` section shows fields you met in Session 01, such as `resourceVersion` (used to detect conflicting writes) and `generation` (which counts changes to the spec).
+
+### Step 8: Check for pods
+
+```bash
+kubectl --context kind-learn get pods -n tenant-acme
+```
+
+Expected output:
+
+```
+No resources found in tenant-acme namespace.
+```
+
+**What it means:** this is the key result. The record exists, but no sandbox was created, because **a CRD only defines the record; a controller has to act on it.** In the [flow diagram](../assets/deployment-to-pods-flow.svg), the chain stops after step 5: the watch event fires, but nothing is listening. Session 05 writes that controller.
+
+### Step 9: Try invalid sessions
+
+Each command below sends one bad session. The schema should reject the first four before anything is stored.
+
+**An unknown runtime:**
+
+```bash
+kubectl --context kind-learn apply -f - <<'EOF'
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata: {name: bad, namespace: tenant-acme}
+spec: {image: python:3.12-slim, runtime: firecracker}
+EOF
+```
+
+Expected: `spec.runtime: Unsupported value: "firecracker": supported values: "gvisor", "runc"`
+
+**A missing image:**
+
+```bash
+kubectl --context kind-learn apply -f - <<'EOF'
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata: {name: bad, namespace: tenant-acme}
+spec: {runtime: gvisor}
+EOF
+```
+
+Expected: `spec.image: Required value`
+
+**A 7-day lifetime:**
+
+```bash
+kubectl --context kind-learn apply -f - <<'EOF'
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata: {name: bad, namespace: tenant-acme}
+spec: {image: python:3.12-slim, ttlSeconds: 604800}
+EOF
+```
+
+Expected: `spec.ttlSeconds in body should be less than or equal to 86400`
+
+**An idle timeout longer than the lifetime:**
+
+```bash
+kubectl --context kind-learn apply -f - <<'EOF'
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata: {name: bad, namespace: tenant-acme}
+spec: {image: python:3.12-slim, ttlSeconds: 600, idleTimeoutSeconds: 900}
+EOF
+```
+
+Expected: `idleTimeoutSeconds must not exceed ttlSeconds`. This one comes from the custom CEL rule in the CRD, which compares two fields.
+
+**Opting out of gVisor:**
+
+```bash
+kubectl --context kind-learn apply -f - <<'EOF'
+apiVersion: agents.example.dev/v1alpha1
+kind: AgentSession
+metadata: {name: bad, namespace: tenant-acme}
+spec: {image: python:3.12-slim, runtime: runc}
+EOF
+```
+
+Expected: `agentsession.agents.example.dev/bad created`
+
+The first two also print a second line, `some validation rules were not checked because the object was invalid`. That just means the custom rules were skipped because basic checks already failed.
+
+**What it means:** the first four were rejected by the API server with clear messages: input checking you got without writing code. The last one was **accepted**: any user can skip the sandbox. The schema checks the *shape* of input, not *who* is asking. That gap led to decision 1, enforced later by an admission policy (Session 06).
+
+Remove the accepted bad session:
+
+```bash
+kubectl --context kind-learn delete agentsession bad -n tenant-acme
+```
+
+### Step 10: Try to fake the status
+
+First, as a user would, through the normal endpoint:
+
+```bash
+kubectl --context kind-learn patch agentsession research-task-42 -n tenant-acme --type merge -p '{"status":{"phase":"Ready"}}'
+```
+
+Expected output:
+
+```
+agentsession.agents.example.dev/research-task-42 patched (no change)
+```
+
+Then as the controller would, through the status subresource:
+
+```bash
+kubectl --context kind-learn patch agentsession research-task-42 -n tenant-acme --subresource=status --type merge -p '{"status":{"phase":"Pending","observedGeneration":1}}'
+```
+
+```bash
+kubectl --context kind-learn get agentsessions -n tenant-acme
+```
+
+Expected output:
+
+```
+agentsession.agents.example.dev/research-task-42 patched
+NAME               PHASE     RUNTIME   TTL    AGE
+research-task-42   Pending   gvisor    1800   ...
+```
+
+**What it means:** because the CRD declares a `status` subresource, the normal endpoint silently ignores status changes ("no change"). Only the separate `/status` endpoint can set it, and permissions for it are granted separately. So users can't make a session look "Ready"; only the controller will be allowed to.
+
+### Step 11: Give a tenant user narrow permissions
+
+Create a Role that allows managing sessions in `tenant-acme`, and grant it to a user called `alice`:
+
+```bash
+kubectl --context kind-learn create role session-user -n tenant-acme --verb=get,list,watch,create,patch,delete --resource=agentsessions.agents.example.dev
+```
+
+```bash
+kubectl --context kind-learn create rolebinding alice-session-user -n tenant-acme --role=session-user --user=alice
+```
+
+Expected output:
+
+```
+role.rbac.authorization.k8s.io/session-user created
+rolebinding.rbac.authorization.k8s.io/alice-session-user created
+```
+
+**What it means:** a Role is a list of allowed actions in one namespace; a RoleBinding grants it to a user. `alice` doesn't need to exist anywhere: Kubernetes has no user database, so permissions attach to whatever name a certificate or token presents (Session 03).
+
+### Step 12: Check what alice can do
+
+`kubectl auth can-i` asks the API server "would this be allowed?" without doing it. `--as=alice` asks on alice's behalf.
+
+```bash
+kubectl --context kind-learn auth can-i create agentsessions -n tenant-acme --as=alice
+```
+Expected: `yes`
+
+```bash
+kubectl --context kind-learn auth can-i patch agentsessions --subresource=status -n tenant-acme --as=alice
+```
+Expected: `no`
+
+```bash
+kubectl --context kind-learn auth can-i create pods -n tenant-acme --as=alice
+```
+Expected: `no`
+
+```bash
+kubectl --context kind-learn auth can-i get secrets -n tenant-acme --as=alice
+```
+Expected: `no`
+
+```bash
+kubectl --context kind-learn auth can-i create agentsessions -n tenant-globex --as=alice
+```
+Expected: `no`
+
+Finally, the real attempt to fake status, as alice:
+
+```bash
+kubectl --context kind-learn patch agentsession research-task-42 -n tenant-acme --as=alice --subresource=status --type merge -p '{"status":{"phase":"Ready"}}'
+```
+
+Expected: `Error from server (Forbidden): ... User "alice" cannot get resource "agentsessions/status" ...`
+
+**What it means:** alice can create and manage sessions in her own namespace, and nothing else: no pods, no Secrets, no status, no other tenant. **This is the core argument for building the platform as an operator:** users get one narrow permission ("create an AgentSession") instead of dangerous broad ones ("create any pod"). The controller holds the pod permissions and decides what the pods look like.
+
+*Gotcha:* don't write `kubectl auth can-i patch agentsessions/status`. kubectl reads `status` as the *name* of a session and wrongly answers `yes`. Use `--subresource=status`.
+
+### What stays in the cluster
+
+The CRD, the `tenant-acme` namespace, `research-task-42`, the `session-user` Role and alice's RoleBinding stay for Session 05.
+
+## What the lab showed (summary)
 
 **1. A CRD is only half an operator.** After `kubectl apply`, the API server served `agentsessions` (short name `as`) immediately, with no restart or code. The sample session was accepted, validated, stored and listed with custom columns, but **no pod was created and `PHASE` stayed empty**. Nothing acts on the object until a controller exists. It's Session 01 in reverse: there you removed a loop; here there's an API with no loop at all.
 
